@@ -1,6 +1,7 @@
 from .modem import FreeDVRX, FreeDVTX, Modems, Packet
 from . import audio
 from .shell import FreeDVShell
+from .command_server import CommandServer
 import logging
 import configargparse
 from . import tnc
@@ -38,7 +39,11 @@ def main():
     p.add('--ptt-off-delay-ms', type=int, default=100, env_var="FREEDVTNC2_PTT_OFF_DELAY_MS", help="Delay after sending data before releasing PTT")
 
     p.add('--callsign', type=str, env_var="FREEDVTNC2_CALLSIGN", help="Currently only used for chat")
-    
+
+    # Command interface (freedvtnc2-lfm addition)
+    p.add('--cmd-port', type=int, default=8002, env_var="FREEDVTNC2_CMD_PORT", help="TCP port for command interface (0 to disable)")
+    p.add('--cmd-address', type=str, default="0.0.0.0", env_var="FREEDVTNC2_CMD_ADDRESS", help="Address to bind command interface")
+
     options = p.parse_args()
 
     logger = logging.getLogger()
@@ -181,6 +186,20 @@ def main():
         )
         logging.info(f"Initialised Output Audio: {output_device.device.name}")
 
+        # Start command server (freedvtnc2-lfm addition)
+        cmd_server = None
+        if options.cmd_port != 0:
+            cmd_server = CommandServer(
+                modem_tx=modem_tx,
+                output_device=output_device,
+                input_device=input_device,
+                options=options,
+                port=options.cmd_port,
+                address=options.cmd_address
+            )
+            cmd_server.start()
+            logging.info(f"Initialised Command Server at {options.cmd_address}:{options.cmd_port}")
+
         try:
             if not options.no_cli:
                 logging.debug(f"Starting shell")
@@ -193,6 +212,8 @@ def main():
                     time.sleep(0.1)
         except KeyboardInterrupt:
             log_handler.shell = None
+            if cmd_server:
+                cmd_server.stop()
             if "rig" in locals():
                 rig.ptt_disable()
             input_device.close()
