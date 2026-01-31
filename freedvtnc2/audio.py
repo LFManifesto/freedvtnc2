@@ -169,6 +169,11 @@ class OutputDevice():
     inhibit = False
     output_buffer_thread = None
 
+    # TX Gate: controls whether PTT can be triggered
+    # States: ENABLED (always TX), DISABLED (never TX), WINDOW (TX until expiry)
+    tx_gate_state = "ENABLED"  # Default: TX allowed
+    tx_window_expiry = 0  # Unix timestamp when window closes
+
     @property
     def queue_ms(self):
         return (len(self.buffer)/self.bit_depth/self.device.sample_rate)*1000
@@ -311,6 +316,9 @@ class OutputDevice():
 
         ptt = False
 
+        # TX Gate check: if gate is closed and we're not already transmitting, skip
+        if not self.is_tx_allowed() and self.ptt == False:
+            return (bytes(output), pyaudio.paContinue)
 
         # if we aren't transmitting and we have inhibited tx then skip
         if self.inhibit == True and self.ptt == False:
@@ -342,5 +350,55 @@ class OutputDevice():
         with self.output_buffer_lock:
             self.buffer = bytearray()
         return
+
     def close(self):
         self.stream.close()
+
+    # TX Gate methods
+    def tx_enable(self):
+        """Enable TX permanently (HF Only mode)."""
+        self.tx_gate_state = "ENABLED"
+        self.tx_window_expiry = 0
+        logging.info("TX gate: ENABLED")
+
+    def tx_disable(self):
+        """Disable TX permanently (Internet Only mode)."""
+        self.tx_gate_state = "DISABLED"
+        self.tx_window_expiry = 0
+        # Clear any pending TX
+        self.clear()
+        with self.send_queue_lock:
+            self.send_queue = []
+        logging.info("TX gate: DISABLED")
+
+    def tx_window(self, seconds: int):
+        """Open TX window for specified seconds (Hybrid mode beacon)."""
+        self.tx_gate_state = "WINDOW"
+        self.tx_window_expiry = time.time() + seconds
+        logging.info(f"TX gate: WINDOW open for {seconds}s")
+
+    def tx_status(self) -> tuple:
+        """Get TX gate status. Returns (state, remaining_seconds or None)."""
+        if self.tx_gate_state == "ENABLED":
+            return ("ENABLED", None)
+        elif self.tx_gate_state == "DISABLED":
+            return ("DISABLED", None)
+        else:  # WINDOW
+            remaining = max(0, int(self.tx_window_expiry - time.time()))
+            if remaining <= 0:
+                self.tx_gate_state = "DISABLED"
+                return ("DISABLED", None)
+            return ("WINDOW", remaining)
+
+    def is_tx_allowed(self) -> bool:
+        """Check if TX is currently allowed by the gate."""
+        if self.tx_gate_state == "ENABLED":
+            return True
+        elif self.tx_gate_state == "DISABLED":
+            return False
+        else:  # WINDOW
+            if time.time() < self.tx_window_expiry:
+                return True
+            else:
+                self.tx_gate_state = "DISABLED"
+                return False

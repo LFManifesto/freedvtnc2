@@ -18,7 +18,20 @@ class CommandServer:
     """
     TCP server that accepts ASCII commands to control the modem.
 
-    Commands: MODE, VOLUME, FOLLOW, STATUS, LEVELS, PTT TEST, CLEAR, SAVE, PING
+    Commands:
+        MODE [mode]     - Get/set FreeDV mode
+        VOLUME [dB]     - Get/set TX output volume
+        FOLLOW [ON|OFF] - Get/set follow mode
+        STATUS          - Get modem status
+        LEVELS          - Get audio levels (RX dB)
+        PTT TEST        - Trigger 2s test tone
+        TX ENABLE       - Enable TX permanently
+        TX DISABLE      - Disable TX permanently
+        TX WINDOW <sec> - Open TX window for N seconds
+        TX STATUS       - Get TX gate status
+        CLEAR           - Clear TX buffer
+        SAVE            - Save config to file
+        PING            - Connection test
     """
 
     def __init__(
@@ -160,6 +173,9 @@ class CommandServer:
                     return self._cmd_ptt_test()
                 return "ERROR Unknown PTT command. Use: PTT TEST"
 
+            elif cmd == "TX":
+                return self._cmd_tx(arg)
+
             elif cmd == "CLEAR":
                 return self._cmd_clear()
 
@@ -288,3 +304,44 @@ class CommandServer:
             return f"OK SAVE {path}"
         except Exception as e:
             return f"ERROR Save failed: {e}"
+
+    def _cmd_tx(self, arg: str) -> str:
+        """
+        Handle TX gate commands.
+
+        TX ENABLE  - Enable TX permanently (HF Only mode)
+        TX DISABLE - Disable TX permanently (Internet Only mode)
+        TX WINDOW <seconds> - Open TX window for N seconds (Hybrid beacon)
+        TX STATUS  - Get current TX gate status
+        """
+        parts = arg.split()
+        subcmd = parts[0] if parts else ""
+
+        if subcmd == "ENABLE":
+            self.output_device.tx_enable()
+            return "OK TX ENABLED"
+
+        elif subcmd == "DISABLE":
+            self.output_device.tx_disable()
+            return "OK TX DISABLED"
+
+        elif subcmd == "WINDOW":
+            if len(parts) < 2:
+                return "ERROR TX WINDOW requires seconds argument"
+            try:
+                seconds = int(parts[1])
+                if seconds < 1 or seconds > 600:
+                    return "ERROR TX WINDOW seconds must be 1-600"
+                self.output_device.tx_window(seconds)
+                return f"OK TX WINDOW {seconds}"
+            except ValueError:
+                return "ERROR TX WINDOW seconds must be integer"
+
+        elif subcmd == "STATUS":
+            state, remaining = self.output_device.tx_status()
+            if remaining is not None:
+                return f"OK TX {state}:{remaining}"
+            return f"OK TX {state}"
+
+        else:
+            return "ERROR Unknown TX command. Use: TX ENABLE|DISABLE|WINDOW <sec>|STATUS"
